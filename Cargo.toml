@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.93"
+regex = "1.11.1"
 unicode-width = { version = "0.2.0", default-features = false }
