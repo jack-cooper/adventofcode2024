@@ -30,7 +30,11 @@ pub fn solve_day(
     for initials in INITIALS {
         let input = fs::read_to_string(format!("input/{day}/{initials}.txt"))?;
 
-        answers.push((part1(&input), part2(&input)));
+        if input.is_empty() {
+            answers.push((Err(anyhow!("Empty input")), Err(anyhow!("Empty input"))));
+        } else {
+            answers.push((part1(&input), part2(&input)));
+        }
     }
 
     for (part1_answer, part2_answer) in &answers {
