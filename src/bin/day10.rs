@@ -1,7 +1,6 @@
 use std::{collections::HashSet, ops::Index};
 
 use adventofcode::solve_day;
-use anyhow::bail;
 use glam::IVec2;
 
 fn main() -> anyhow::Result<()> {
