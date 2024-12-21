@@ -24,9 +24,7 @@ fn part1(input: &str) -> anyhow::Result<u64> {
 
     const BLINKS: u32 = 25;
 
-    for temp in 0..BLINKS {
-        println!("{temp} | {}", stones.len());
-
+    for _ in 0..BLINKS {
         let mut current_index = 0;
 
         while current_index < stones.len() {
