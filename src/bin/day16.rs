@@ -1,18 +1,13 @@
 use core::fmt;
 use std::{
     cell::OnceCell,
-    cmp::Reverse,
-    collections::{hash_map::Entry, BinaryHeap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
 };
 
 use adventofcode::solve_day;
 use anyhow::{anyhow, bail};
 use glam::IVec2;
-use petgraph::{
-    graph::NodeIndex,
-    prelude::StableGraph,
-    visit::{EdgeRef, VisitMap as _, Visitable},
-};
+use petgraph::{algo, graph::NodeIndex, visit::EdgeRef, Graph};
 
 fn main() -> anyhow::Result<()> {
     solve_day(file!(), part1, part2)
@@ -75,6 +70,16 @@ impl Direction {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Node {
+    cost: u64,
+    position: IVec2,
+}
+
+struct Edge {
+    cost: u64,
+}
+
 fn part1(input: &str) -> anyhow::Result<u64> {
     let mut maze: Vec<Vec<PositionType>> = Vec::new();
 
@@ -111,282 +116,107 @@ fn part1(input: &str) -> anyhow::Result<u64> {
         .into_inner()
         .ok_or(anyhow!("Didn't find an end position!"))?;
 
-    let (width, height) = (maze[0].len(), maze.len());
-
-    for y in 0..height {
-        'dead_end_search: for x in 0..width {
-            let position_type = maze[y][x];
-
-            if position_type == PositionType::Wall
-                || IVec2::new(x as i32, y as i32) == start
-                || IVec2::new(x as i32, y as i32) == end
-            {
-                continue;
-            }
-
-            let mut y = y;
-            let mut x = x;
-
-            loop {
-                let dead_end_neighbor: OnceCell<IVec2> = OnceCell::new();
-                let current_position = IVec2::new(x as i32, y as i32);
-
-                if current_position == start || current_position == end {
-                    continue 'dead_end_search;
-                }
-
-                for direction in Direction::ALL {
-                    let neighbor_candidate = current_position + direction.xy();
-
-                    if maze
-                        .get(neighbor_candidate.y as usize)
-                        .and_then(|row| row.get(neighbor_candidate.x as usize))
-                        .copied()
-                        == Some(PositionType::Empty)
-                        && dead_end_neighbor.set(neighbor_candidate).is_err()
-                    {
-                        continue 'dead_end_search;
-                    }
-                }
-
-                maze[y][x] = PositionType::Wall;
-
-                let dead_end_neighbor = dead_end_neighbor.get().unwrap();
-                x = dead_end_neighbor.x as usize;
-                y = dead_end_neighbor.y as usize;
-            }
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct Edge {
-        /// The cost to traverse the edge, accounting for corners between nodes and steps taken.
-        cost: u64,
-        /// The direction faced when going into the end node.
-        direction_in: Direction,
-        /// The direction faced when coming out from the start node.
-        direction_out: Direction,
-    }
-
-    let mut graph: StableGraph<IVec2, Edge> = StableGraph::new();
+    let mut graph: Graph<Node, Edge, _> = Graph::new_undirected();
 
     for (y, row) in maze.iter().enumerate() {
-        'node_search: for (x, &position_type) in row.iter().enumerate() {
+        let y = y as i32;
+        for (x, &position_type) in row.iter().enumerate() {
+            let x = x as i32;
+
             if position_type == PositionType::Wall {
                 continue;
             }
 
-            let position = IVec2::new(x as i32, y as i32);
+            let position = IVec2 { x, y };
 
             if position == start || position == end {
-                graph.add_node(position);
+                graph.add_node(Node { cost: 0, position });
                 continue;
             }
 
-            let mut neighbor_count = 0;
+            let mut neighbor_directions: HashSet<Direction> = HashSet::new();
 
             for direction in Direction::ALL {
-                let neighbor_candidate = IVec2::new(x as i32, y as i32) + direction.xy();
+                let neighbor_candidate = position + direction.xy();
 
                 if maze
                     .get(neighbor_candidate.y as usize)
                     .and_then(|row| row.get(neighbor_candidate.x as usize))
-                    .copied()
-                    == Some(PositionType::Empty)
+                    .is_some_and(|&position_type| position_type == PositionType::Empty)
                 {
-                    neighbor_count += 1;
-                }
-
-                if neighbor_count > 2 {
-                    graph.add_node(position);
-                    continue 'node_search;
+                    if neighbor_directions
+                        .iter()
+                        .any(|&neighbor_direction| neighbor_direction != direction.inverse())
+                    {
+                        graph.add_node(Node {
+                            cost: 1000,
+                            position,
+                        });
+                        break;
+                    } else {
+                        neighbor_directions.insert(direction);
+                    }
                 }
             }
         }
     }
 
-    // let mut output: Vec<Vec<&str>> = Vec::with_capacity(maze.len());
+    let position_to_node: HashMap<IVec2, NodeIndex> = graph
+        .node_indices()
+        .map(|node_index| (graph[node_index].position, node_index))
+        .collect();
 
-    // for (y, row) in maze.iter().enumerate() {
-    //     output.push(Vec::with_capacity(maze[y].len()));
-    //     let y = y as i32;
+    for node in graph.node_indices() {
+        let weight = graph[node];
 
-    //     for (x, cell) in row.iter().enumerate() {
-    //         let x = x as i32;
+        for direction in Direction::ALL {
+            let mut position = weight.position;
 
-    //         let pos = IVec2 { x, y };
+            loop {
+                position += direction.xy();
 
-    //         let symbol = if pos == start {
-    //             "🟥"
-    //         } else if pos == end {
-    //             "🟩"
-    //         } else if graph.node_weights().any(|&node_pos| node_pos == pos) {
-    //             "🟦"
-    //         } else {
-    //             match cell {
-    //                 PositionType::Empty => "⬜",
-    //                 PositionType::Wall => "⬛",
-    //             }
-    //         };
+                if maze
+                    .get(position.y as usize)
+                    .and_then(|row| row.get(position.x as usize))
+                    .is_some_and(|&position_type| position_type == PositionType::Wall)
+                {
+                    break;
+                }
 
-    //         print!("{symbol}");
-    //     }
-    //     println!();
-    // }
+                let Some(&other_node) = position_to_node.get(&position) else {
+                    continue;
+                };
+
+                let mut path_length = (weight.position - position).abs().max_element() as u64;
+
+                if (weight.position == start && direction != Direction::East)
+                    || (graph[other_node].position == start && direction != Direction::West)
+                {
+                    path_length += 1000;
+                }
+
+                graph.update_edge(node, other_node, Edge { cost: path_length });
+            }
+        }
+    }
 
     let start = graph
         .node_indices()
-        .find(|node| graph[*node] == start)
+        .find(|&node| graph[node].position == start)
         .unwrap();
-
     let end = graph
         .node_indices()
-        .find(|node| graph[*node] == end)
+        .find(|&node| graph[node].position == end)
         .unwrap();
 
-    let node_indices: Vec<_> = graph.node_indices().collect();
+    let path_lengths = algo::dijkstra(&graph, start, Some(end), |edge| {
+        let node_cost = graph[edge.source()].cost;
+        let edge_cost = edge.weight().cost;
 
-    for node in node_indices {
-        for direction in Direction::ALL {
-            let direction_out = direction;
-            let mut direction_previous = direction;
+        node_cost + edge_cost
+    });
 
-            let mut cost = 0;
-            let mut position = graph[node];
-
-            'adjacency_search: loop {
-                let mut search_directions = HashSet::from(Direction::ALL);
-                search_directions.remove(&direction_previous.inverse());
-
-                if position == graph[node] {
-                    search_directions.retain(|&direction| direction == direction_out);
-                }
-
-                for direction_current in search_directions {
-                    let neighbor_candidate = position + direction_current.xy();
-
-                    if maze
-                        .get(neighbor_candidate.y as usize)
-                        .and_then(|row| row.get(neighbor_candidate.x as usize))
-                        .is_some_and(|&position| position == PositionType::Empty)
-                    {
-                        cost += if direction_current == direction_previous {
-                            1
-                        } else {
-                            1001
-                        };
-
-                        position = neighbor_candidate;
-                        direction_previous = direction_current;
-
-                        if let Some(terminating_node) = graph
-                            .node_indices()
-                            .find(|&node_index| graph[node_index] == position)
-                        {
-                            graph.add_edge(
-                                node,
-                                terminating_node,
-                                Edge {
-                                    cost,
-                                    direction_in: direction_current,
-                                    direction_out,
-                                },
-                            );
-
-                            break 'adjacency_search;
-                        } else {
-                            break;
-                        }
-                    } else if position == graph[node] {
-                        break 'adjacency_search;
-                    }
-                }
-            }
-        }
-    }
-
-    let mut visit_next: BinaryHeap<(Reverse<u64>, NodeIndex)> = BinaryHeap::new();
-
-    let mut visited = graph.visit_map();
-    let mut entry_dirs: HashMap<NodeIndex, Vec<Direction>> =
-        HashMap::from([(start, vec![Direction::East])]);
-    let mut path_lengths = HashMap::new();
-
-    path_lengths.insert(start, 0);
-    visit_next.push((Reverse(0), start));
-
-    while let Some((Reverse(node_score), node)) = visit_next.pop() {
-        if visited.is_visited(&node) {
-            continue;
-        }
-
-        if node == end {
-            break;
-        }
-
-        let directions = entry_dirs[&node].clone();
-
-        for edge in graph.edges(node) {
-            let next = edge.target();
-
-            if visited.is_visited(&next) {
-                continue;
-            }
-
-            // Add 1000 to cost if we couldn't enter this node facing the direction we're going to leave it facing
-            let turning_cost = if directions.contains(&edge.weight().direction_out) {
-                0
-            } else {
-                1000
-            };
-
-            let next_score = node_score + edge.weight().cost + turning_cost;
-
-            match path_lengths.entry(next) {
-                Entry::Occupied(mut ent) => {
-                    let score = ent.get_mut();
-
-                    if next_score <= *score {
-                        if next_score < *score {
-                            *score = next_score;
-                            visit_next.push((Reverse(next_score), next));
-
-                            entry_dirs.get_mut(&next).unwrap().clear();
-                        }
-
-                        entry_dirs
-                            .entry(next)
-                            .or_insert_with(|| unreachable!())
-                            .push(edge.weight().direction_in);
-                    }
-                }
-                Entry::Vacant(ent) => {
-                    ent.insert(next_score);
-                    visit_next.push((Reverse(next_score), next));
-
-                    if entry_dirs
-                        .insert(next, vec![edge.weight().direction_in])
-                        .is_some()
-                    {
-                        panic!();
-                    }
-                }
-            }
-        }
-
-        visited.visit(node);
-    }
-
-    let mut counts: HashMap<usize, u64> = HashMap::new();
-    for (node_index, dirvec) in entry_dirs {
-        *counts.entry(dirvec.len()).or_default() += 1;
-    }
-
-    dbg!(counts);
-
-    let length = path_lengths[&end];
-
-    Ok(length)
+    Ok(path_lengths[&end])
 }
 
 fn part2(_input: &str) -> anyhow::Result<u64> {
